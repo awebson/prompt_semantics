@@ -27,8 +27,8 @@ python3 prompt_tune.py \
 
 To get a fine-tuning baseline (Figure 1):
 ```
-python3 fine_tuned.py \
-    --save-dir ../runs/fine_tuned/ \
+python3 fine_tune.py \
+    --save-dir ../runs/fine_tune/ \
     --epochs 5 \
     --few-shots 3,5,10,20,30,50,100,250 \
     --fully-train \
@@ -52,4 +52,9 @@ Python 3.9.
 
 3.7 should mostly work too. You’d have to just replace the new [built-in type hints](https://www.python.org/dev/peps/pep-0585/) and dictionary union operators with their older equivalents.
 
-Activate your preferred virtual envrionment and then run `pip install -r requirements.txt`.
+Activate your preferred virtual envrionment and then run `pip install -r requirements.txt`. If you want to replicate our exact results, use
+```
+torch==1.9.0+cu111
+transformers==4.9.2
+datasets==1.11.0
+```
