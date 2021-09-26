@@ -1,4 +1,4 @@
-This repository accompanies our paper [“Do Prompt-Based Models Really Understand the Meaning of Their Prompts?”](./Webson_and_Pavlick_2021.pdf)
+This repository accompanies our paper [“Do Prompt-Based Models Really Understand the Meaning of Their Prompts?”](https://arxiv.org/abs/2109.01247)
 
 ## Usage
 
@@ -57,4 +57,16 @@ Activate your preferred virtual envrionment and then run `pip install -r require
 torch==1.9.0+cu111
 transformers==4.9.2
 datasets==1.11.0
+```
+
+## Citation
+```
+@misc{webson-pavlick-2021,
+      title={Do Prompt-Based Models Really Understand the Meaning of their Prompts?}, 
+      author={Albert Webson and Ellie Pavlick},
+      year={2021},
+      eprint={2109.01247},
+      archivePrefix={arXiv},
+      primaryClass={cs.CL}
+}
 ```
