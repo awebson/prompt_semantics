@@ -1,5 +1,7 @@
 This repository accompanies our paper [“Do Prompt-Based Models Really Understand the Meaning of Their Prompts?”](https://arxiv.org/abs/2109.01247)
 
+Currently, this is the code for experiments in version 1 of our arXiv. I will update the code for version 2 soon.
+
 ## Usage
 
 To replicate our results in Section 4, run:
