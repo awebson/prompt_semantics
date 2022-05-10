@@ -15,21 +15,21 @@ from utils import Silence, HANS_subcases
 
 parser = argparse.ArgumentParser()
 parser.add_argument('-s', '--save-dir', type=Path, required=True)
-parser.add_argument('-e', '--epochs', type=int, default=5)
-parser.add_argument('--few-shots', type=str, default='3,5,10,20,30,50,100,250')
-parser.add_argument('--fully-train', action='store_true')
-parser.add_argument('--train-batch-size', type=int, default=5)
+parser.add_argument('-e', '--epochs', type=int, default=0)
+parser.add_argument('-ns', '--num-shots', type=str, default='4,8,16,32')
+parser.add_argument('-ft', '--fully-train', action='store_true')
+parser.add_argument('--train-batch-size', type=int, default=16)
 parser.add_argument('--eval-batch-size', type=int, default=64)
-parser.add_argument('--min-seen', type=int, default=300)
-parser.add_argument('--eval-steps', type=int, default=20)
+parser.add_argument('-lr', '--learning-rate', type=float, default=1e-5)
+parser.add_argument('-fe', '--fixed-num-evals', type=int, default=0)
 parser.add_argument('--seeds', type=str, default='42')
-# parser.add_argument('--do-diagnosis', action='store_true')
+parser.add_argument('--do-diagnosis', action='store_true')
 parser.add_argument('--subsample-subcase', type=int, default=100)
 parser.add_argument('--debug', action='store_true')
 parser.add_argument('--production', action='store_true')
 args = parser.parse_args()
 args.seeds = list(map(int, args.seeds.split(',')))
-args.few_shots = list(map(int, args.few_shots.split(',')))
+args.num_shots = list(map(int, args.num_shots.split(',')))
 args.device = torch.device('cuda')
 args.save_dir.mkdir(parents=True, exist_ok=True)
 args.model_brands = [
@@ -48,7 +48,7 @@ else:
     hf.logging.set_verbosity_error()
 
 # if args.debug:  # only train on a small subset
-#     args.few_shots = [32,]
+#     args.num_shots = [32,]
 #     args.model_brands = args.model_brands[:1]
 
 
@@ -64,7 +64,10 @@ class DiagnosticTrainer(hf.Trainer):
             ) -> hf.trainer_utils.EvalLoopOutput:
         # model = self._wrap_model(self.model, training=False)
         self.model.eval()
-        diagnosis = self.diagnostic_loop()
+        if args.do_diagnosis:
+            diagnosis = self.diagnostic_loop()
+        else:
+            diagnosis = {}
         diagnosis['step'] = self.state.global_step * args.train_batch_size  # TODO wrong when len(train) < batch size
         diagnosis['epoch'] = round(self.state.epoch, 1)
 
@@ -78,8 +81,8 @@ class DiagnosticTrainer(hf.Trainer):
             correct += (predictions == labels).sum().item()
             total += len(labels)
         dev_acc = round(correct / total, 4)
-        metrics = {'dev_acc': dev_acc}
-        diagnosis['dev_acc'] = dev_acc
+        metrics = {'eval_rank_acc': dev_acc}
+        diagnosis['eval_rank_acc'] = dev_acc
         self.diagnoses.append(diagnosis)
         return hf.trainer_utils.EvalLoopOutput(
             predictions=None, label_ids=None, metrics=metrics, num_samples=len(dev_dataloader))
@@ -122,18 +125,30 @@ def arrange_training(
         dev_set: hfd.Dataset,
         diagnostic_set: hfd.Dataset,
         ) -> list[dict]:
-    if len(train_set) <= args.train_batch_size:
-        eval_strategy = 'steps'
-        batched_eval_steps = args.eval_steps // len(train_set)
-        epochs = max(1, args.min_seen // len(train_set))
-    elif len(train_set) <= 100:  # < args.min_seen:  # few_shots
-        eval_strategy = 'steps'  # batched steps, actually
-        batched_eval_steps = args.eval_steps // args.train_batch_size
-        epochs = max(1, args.min_seen // len(train_set))
+    if train_set is None:  # zero-shot
+        adjusted_train_batch_size = 0
+        eval_strategy = 'epoch'
+        epochs = 0
+        batched_eval_steps = None
+    elif len(train_set) <= args.train_batch_size:
+        adjusted_train_batch_size = len(train_set)  # a batch has the entire train set
+        eval_strategy = 'epoch'
+        # epochs = args.epochs * 2
+        epochs = args.epochs
+        batched_eval_steps = None
     else:
+        adjusted_train_batch_size = args.train_batch_size
         eval_strategy = 'epoch'
         epochs = args.epochs
-        batched_eval_steps = 0
+        batched_eval_steps = None
+
+    if args.fixed_num_evals:
+        eval_strategy = 'steps'
+        if args.max_steps != -1:
+            total_steps = args.max_steps
+        else:
+            total_steps = len(train_set) * epochs / adjusted_train_batch_size
+        batched_eval_steps = total_steps / args.fixed_num_evals
 
     train_args = hf.TrainingArguments(
         output_dir=args.save_dir,
@@ -143,19 +158,15 @@ def arrange_training(
         per_device_train_batch_size=args.train_batch_size,
         per_device_eval_batch_size=args.eval_batch_size,
         num_train_epochs=epochs,
-        learning_rate=1e-5,
+        learning_rate=args.learning_rate,
         weight_decay=0.01,
         remove_unused_columns=True,
-        disable_tqdm=not args.debug,
+        disable_tqdm=args.production,
+        logging_steps=8 if args.production else 1,
+        log_level='info' if args.debug else 'warning',
         save_strategy='no',
         seed=args.current_seed
     )
-
-    # metric = hfd.load_metric('super_glue', 'rte')
-    # def compute_metrics(eval_pred):
-    #     logits, labels = eval_pred
-    #     predictions = np.argmax(logits, axis=-1)
-    #     return metric.compute(predictions=predictions, references=labels)
 
     trainer = DiagnosticTrainer(
         model=model,
@@ -163,31 +174,32 @@ def arrange_training(
         train_dataset=train_set,
         eval_dataset=dev_set,
         tokenizer=tokenizer,
-        # compute_metrics=compute_metrics
     )
     trainer.diagnostic_set = diagnostic_set  # hack
     trainer.diagnoses = []
-    with Silence(suppress_stdout=args.production, suppress_stderr=args.production):
-        trainer.train()
+    # with Silence(suppress_stdout=args.production, suppress_stderr=args.production):
+    trainer.train()
     return trainer.diagnoses
 
 
 def main() -> None:
     train_set = hfd.load_dataset('super_glue', 'rte', split='train')
     dev_set = hfd.load_dataset('super_glue', 'rte', split='validation')
-    diagnostic_set = hfd.load_dataset('hans', split='validation')
-    diagnostic_set = diagnostic_set.remove_columns(
-        ['parse_premise', 'parse_hypothesis', 'binary_parse_premise', 'binary_parse_hypothesis'])
+    if args.do_diagnosis:
+        diagnostic_set = hfd.load_dataset('hans', split='validation')
+        diagnostic_set = diagnostic_set.remove_columns(
+            ['parse_premise', 'parse_hypothesis', 'binary_parse_premise', 'binary_parse_hypothesis'])
     if args.fully_train:
-        args.few_shots.append(len(train_set))
+        args.num_shots.append(len(train_set))
 
     manually_ordered_fieldnames = [
+        'template_category',
         'template',
         'targets',
-        'train_size',
+        'num_shots',
         'epoch',
         'step',
-        'dev_acc',
+        'eval_rank_acc',
         'diag_avg',
         'LE', 'SE', 'CE',
         'LN', 'SN', 'CN',
@@ -196,13 +208,13 @@ def main() -> None:
         'brand',
     ]
     manually_ordered_fieldnames += HANS_subcases
-    out_path = args.save_dir / f'fine_tuned_s{args.current_seed}.tsv'
+    out_path = args.save_dir / f'fine_tuned_s{args.current_seed}.csv'
     out_file = open(out_path, 'w')
     writer = csv.DictWriter(
-        out_file, fieldnames=manually_ordered_fieldnames, dialect=csv.excel_tab)
+        out_file, fieldnames=manually_ordered_fieldnames)
     writer.writeheader()
 
-    for brand in tqdm(args.model_brands, desc='Model Brands'):
+    for brand in tqdm(args.model_brands, desc='Model Brands', disable=len(args.model_brands) == 1):
         tokenizer = hf.AutoTokenizer.from_pretrained(brand)
         def tokenize_sentence_pair(examples: dict) -> dict:
             return tokenizer(
@@ -211,9 +223,12 @@ def main() -> None:
 
         proc_train = train_set.map(tokenize_sentence_pair)
         proc_dev = dev_set.map(tokenize_sentence_pair)
-        proc_diag = diagnostic_set.map(tokenize_sentence_pair)
+        if args.do_diagnosis:
+            proc_diag = diagnostic_set.map(tokenize_sentence_pair)
+        else:
+            proc_diag = None
 
-        for num_shots in tqdm(args.few_shots, desc='Num. Shots'):
+        for num_shots in tqdm(args.num_shots, desc='Num. Shots'):
             result_table: list[dict] = []
             max_index = len(train_set) - num_shots
             start_index = random.randint(0, max_index)
@@ -225,8 +240,9 @@ def main() -> None:
                 'brand': brand,
                 # 'm. param.': f'{model.num_parameters() / 1_000_000:.0f}',
                 'template': 'FT',
+                'template_category': 'FT',
                 'targets': 'FT;FT',
-                'train_size': num_shots,
+                'num_shots': num_shots,
                 'starting_example_index': start_index,
                 'seed': args.current_seed,
             }

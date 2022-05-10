@@ -4,3 +4,5 @@ datasets
 tqdm
 IPython
 rich
+protobuf
+sklearn

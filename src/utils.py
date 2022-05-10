@@ -1,6 +1,30 @@
 import os
 import sys
 
+
+table_columns = [
+    'template_name',
+    'template_category',
+    'target_category',
+    'prompt_comment',
+    'num_shots',
+    'epoch',
+    'step',
+    # 'cumulative_examples',
+    'eval_top1_acc',
+    'eval_rank_acc',
+    'eval_loss',
+    'starting_example_index',
+    'seed',
+    'template',
+    'targets',
+    'dataset',
+    'brand',
+    'batch_size',
+    'error',
+]
+
+
 HANS_subcases = (
     'ln_subject/object_swap',
     'ln_preposition',
